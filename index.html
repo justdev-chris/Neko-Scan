@@ -1,1 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEKOSCAN</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #0a0a0a;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #00ffff;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+        
+        #cameraFeed {
+            width: 100%;
+            background: #111;
+            border: 2px solid #333;
+            border-radius: 8px;
+        }
+        
+        .controls {
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        button {
+            background: #222;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        
+        button:hover {
+            background: #00ff00;
+            color: #000;
+        }
+        
+        #capturedImage {
+            width: 100%;
+            display: none;
+            margin-top: 20px;
+            border: 2px solid #333;
+        }
+        
+        .status {
+            text-align: center;
+            margin: 10px 0;
+            color: #ffff00;
+        }
+        
+        #edgeCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        
+        .camera-container {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }
+        
+        .upload-area {
+            border: 2px dashed #333;
+            padding: 40px 20px;
+            text-align: center;
+            margin: 20px 0;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        
+        .upload-area:hover {
+            border-color: #00ff00;
+            background: #111;
+        }
+        
+        .upload-area.highlight {
+            border-color: #00ffff;
+            background: #112211;
+        }
+        
+        #fileInput {
+            display: none;
+        }
+        
+        .mode-toggle {
+            text-align: center;
+            margin: 15px 0;
+        }
+        
+        .mode-btn {
+            background: #333;
+            margin: 0 5px;
+        }
+        
+        .mode-btn.active {
+            background: #00ff00;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>NEKOSCAN v0.3</h1>
+        
+        <div class="status" id="status">SELECT MODE: CAMERA OR UPLOAD</div>
+        
+        <div class="mode-toggle">
+            <button id="cameraModeBtn" class="mode-btn active">📷 CAMERA</button>
+            <button id="uploadModeBtn" class="mode-btn">📁 UPLOAD</button>
+        </div>
+        
+        <!-- Camera Mode -->
+        <div id="cameraMode">
+            <div class="camera-container">
+                <video id="cameraFeed" autoplay playsinline></video>
+                <canvas id="edgeCanvas"></canvas>
+            </div>
+            
+            <div class="controls">
+                <button id="captureBtn">CAPTURE</button>
+                <button id="autoCaptureBtn" style="background: #004400;">AUTO-CAPTURE</button>
+            </div>
+        </div>
+        
+        <!-- Upload Mode -->
+        <div id="uploadMode" style="display: none;">
+            <div class="upload-area" id="uploadArea">
+                <div>📁 DROP IMAGE HERE OR CLICK TO BROWSE</div>
+                <div style="font-size: 12px; margin-top: 10px; color: #888;">
+                    Supports: JPG, PNG, WEBP
+                </div>
+            </div>
+            <input type="file" id="fileInput" accept="image/*">
+        </div>
+        
+        <!-- Results Section (Shared) -->
+        <canvas id="processingCanvas" style="display: none;"></canvas>
+        <canvas id="documentCanvas" style="display: none;"></canvas>
+        
+        <img id="capturedImage" alt="Captured scan">
+        
+        <div class="controls" id="resultControls" style="display: none;">
+            <button id="retakeBtn">NEW SCAN</button>
+            <button id="savePdfBtn">SAVE PDF</button>
+        </div>
+    </div>
 
+    <script>
+        // Elements
+        const video = document.getElementById('cameraFeed');
+        const canvas = document.getElementById('processingCanvas');
+        const documentCanvas = document.getElementById('documentCanvas');
+        const edgeCanvas = document.getElementById('edgeCanvas');
+        const edgeCtx = edgeCanvas.getContext('2d');
+        const ctx = canvas.getContext('2d');
+        const docCtx = documentCanvas.getContext('2d');
+        const captureBtn = document.getElementById('captureBtn');
+        const retakeBtn = document.getElementById('retakeBtn');
+        const savePdfBtn = document.getElementById('savePdfBtn');
+        const autoCaptureBtn = document.getElementById('autoCaptureBtn');
+        const capturedImage = document.getElementById('capturedImage');
+        const status = document.getElementById('status');
+        
+        // Mode elements
+        const cameraMode = document.getElementById('cameraMode');
+        const uploadMode = document.getElementById('uploadMode');
+        const cameraModeBtn = document.getElementById('cameraModeBtn');
+        const uploadModeBtn = document.getElementById('uploadModeBtn');
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const resultControls = document.getElementById('resultControls');
+
+        let isAutoCapture = false;
+        let documentCorners = null;
+        let currentMode = 'camera';
+
+        // Mode Switching
+        cameraModeBtn.addEventListener('click', () => switchMode('camera'));
+        uploadModeBtn.addEventListener('click', () => switchMode('upload'));
+
+        function switchMode(mode) {
+            currentMode = mode;
+            
+            // Update UI
+            cameraModeBtn.classList.toggle('active', mode === 'camera');
+            uploadModeBtn.classList.toggle('active', mode === 'upload');
+            
+            cameraMode.style.display = mode === 'camera' ? 'block' : 'none';
+            uploadMode.style.display = mode === 'upload' ? 'block' : 'none';
+            
+            if (mode === 'camera') {
+                status.textContent = 'CAMERA MODE - DETECTING EDGES';
+                initCamera();
+            } else {
+                status.textContent = 'UPLOAD MODE - SELECT AN IMAGE';
+                stopCamera();
+            }
+            
+            // Reset results when switching modes
+            resetScan();
+        }
+
+        // Upload functionality
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('highlight');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('highlight');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('highlight');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleImageFile(files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleImageFile(e.target.files[0]);
+            }
+        });
+
+        function handleImageFile(file) {
+            if (!file.type.match('image.*')) {
+                status.textContent = 'ERROR: NOT AN IMAGE FILE';
+                return;
+            }
+            
+            status.textContent = 'PROCESSING UPLOADED IMAGE...';
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    // Set canvas size to match image
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    documentCanvas.width = img.width;
+                    documentCanvas.height = img.height;
+                    edgeCanvas.width = img.width;
+                    edgeCanvas.height = img.height;
+                    
+                    // Draw image to canvas for processing
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Detect document edges
+                    detectEdgesInImage();
+                    
+                    // Show result
+                    capturedImage.src = e.target.result;
+                    capturedImage.style.display = 'block';
+                    resultControls.style.display = 'block';
+                    
+                    status.textContent = 'IMAGE PROCESSED - READY FOR PDF';
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function detectEdgesInImage() {
+            // Simple edge detection for uploaded images
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const edges = findEdges(imageData);
+            const detectedRect = findDocumentRect(edges);
+            
+            edgeCtx.clearRect(0, 0, edgeCanvas.width, edgeCanvas.height);
+            
+            if (detectedRect) {
+                documentCorners = detectedRect;
+                
+                edgeCtx.strokeStyle = '#00ff00';
+                edgeCtx.lineWidth = 2;
+                edgeCtx.beginPath();
+                edgeCtx.moveTo(detectedRect[0].x, detectedRect[0].y);
+                for (let i = 1; i < detectedRect.length; i++) {
+                    edgeCtx.lineTo(detectedRect[i].x, detectedRect[i].y);
+                }
+                edgeCtx.closePath();
+                edgeCtx.stroke();
+                
+                // Apply perspective correction
+                applyPerspectiveCorrection();
+            }
+        }
+
+        // Camera functions (same as before)
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' }
+                });
+                video.srcObject = stream;
+                
+                video.addEventListener('loadedmetadata', () => {
+                    edgeCanvas.width = video.videoWidth;
+                    edgeCanvas.height = video.videoHeight;
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    documentCanvas.width = video.videoWidth;
+                    documentCanvas.height = video.videoHeight;
+                    
+                    status.textContent = 'CAMERA ACTIVE - DETECTING EDGES';
+                    startEdgeDetection();
+                });
+                
+            } catch (err) {
+                status.textContent = 'CAMERA ERROR: ' + err.message;
+            }
+        }
+
+        function stopCamera() {
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+        }
+
+        // ... (keep all the existing edge detection, perspective correction, 
+        // and PDF functions from the previous code here)
+
+        // Reset scan results
+        function resetScan() {
+            capturedImage.style.display = 'none';
+            resultControls.style.display = 'none';
+            edgeCtx.clearRect(0, 0, edgeCanvas.width, edgeCanvas.height);
+            
+            if (currentMode === 'camera') {
+                video.style.display = 'block';
+                edgeCanvas.style.display = 'block';
+            }
+        }
+
+        // Initialize in camera mode
+        switchMode('camera');
+
+        // ... (include all the existing edge detection, capture, 
+        // and PDF functions from the previous version)
+    </script>
+</body>
+</html>
